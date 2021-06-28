@@ -23,6 +23,7 @@ int main(int argc, char* argv[])
 
    // use this function to initialize the UDT library
    UDT::startup();
+   //UDT::setTLS(1);
 
    struct addrinfo hints, *peer;
 
@@ -67,12 +68,13 @@ int main(int argc, char* argv[])
    // get size information
    int64_t size;
 
+   std::cout << "try get got filesize = " << size << std::endl;
    if (UDT::ERROR == UDT::recv(fhandle, (char*)&size, sizeof(int64_t), 0))
    {
       cout << "send: " << UDT::getlasterror().getErrorMessage() << endl;
       return -1;
    }
-
+   std::cout << "got filesize = " << size << std::endl;
    if (size < 0)
    {
       cout << "no such file " << argv[3] << " on the server\n";

@@ -52,6 +52,7 @@ int main(int argc, char* argv[])
       return 0;
    }
 
+   UDT::setTLS(0);
    UDTSOCKET serv = UDT::socket(res->ai_family, res->ai_socktype, res->ai_protocol);
 
    // UDT Options
@@ -135,7 +136,7 @@ DWORD WINAPI recvdata(LPVOID usocket)
             cout << "recv:" << UDT::getlasterror().getErrorMessage() << endl;
             break;
          }
-
+         // std::cout << "received " << rs << endl;
          rsize += rs;
       }
 

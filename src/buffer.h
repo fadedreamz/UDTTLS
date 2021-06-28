@@ -73,7 +73,8 @@ public:
       // Returned value:
       //    actual size of data added from the file.
 
-   int addBufferFromFile(std::fstream& ifs, int len);
+   int addBufferFromFile(std::fstream& ifs, int len, ssl_ctx_t * ssl_ctx = nullptr);
+   int queueBufferFromFile(std::fstream& ifs, int len, ssl_ctx_t * ssl_ctx = nullptr);
 
       // Functionality:
       //    Find data position to pack a DATA packet from the furthest reading point.
@@ -193,7 +194,8 @@ public:
       // Returned value:
       //    size of data read.
 
-   int readBufferToFile(std::fstream& ofs, int len);
+   int readBufferToFile(std::fstream& ofs, int len, ssl_ctx_t * ssl_ctx = nullptr);
+   int readTLSBufferToFile(std::fstream& ofs, int len, ssl_ctx_t * ssl_ctx = nullptr);
 
       // Functionality:
       //    Update the ACK point of the buffer.

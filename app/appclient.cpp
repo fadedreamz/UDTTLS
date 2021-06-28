@@ -47,11 +47,12 @@ int main(int argc, char* argv[])
       return 0;
    }
 
+   UDT::setTLS(1);
    UDTSOCKET client = UDT::socket(local->ai_family, local->ai_socktype, local->ai_protocol);
 
    // UDT Options
    //UDT::setsockopt(client, 0, UDT_CC, new CCCFactory<CUDPBlast>, sizeof(CCCFactory<CUDPBlast>));
-   //UDT::setsockopt(client, 0, UDT_MSS, new int(9000), sizeof(int));
+   UDT::setsockopt(client, 0, UDT_MSS, new int(1024), sizeof(int));
    //UDT::setsockopt(client, 0, UDT_SNDBUF, new int(10000000), sizeof(int));
    //UDT::setsockopt(client, 0, UDP_SNDBUF, new int(10000000), sizeof(int));
    //UDT::setsockopt(client, 0, UDT_MAXBW, new int64_t(12500000), sizeof(int));
@@ -116,7 +117,7 @@ int main(int argc, char* argv[])
             cout << "send:" << UDT::getlasterror().getErrorMessage() << endl;
             break;
          }
-
+         // std::cout << "send size : " << ss << endl;
          ssize += ss;
       }
 

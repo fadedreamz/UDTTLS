@@ -29,6 +29,7 @@ int main(int argc, char* argv[])
 
    // use this function to initialize the UDT library
    UDT::startup();
+   //UDT::setTLS(0);
 
    addrinfo hints;
    addrinfo* res;
@@ -122,6 +123,7 @@ DWORD WINAPI sendfile(LPVOID usocket)
       cout << "recv: " << UDT::getlasterror().getErrorMessage() << endl;
       return 0;
    }
+   std::cout << "length of filename = " << len << std::endl;
 
    if (UDT::ERROR == UDT::recv(fhandle, file, len, 0))
    {
@@ -129,6 +131,8 @@ DWORD WINAPI sendfile(LPVOID usocket)
       return 0;
    }
    file[len] = '\0';
+
+   std::cout << "filename = " << file << std::endl;
 
    // open the file
    fstream ifs(file, ios::in | ios::binary);
@@ -138,6 +142,7 @@ DWORD WINAPI sendfile(LPVOID usocket)
    ifs.seekg(0, ios::beg);
 
    // send file size information
+   std::cout << "sent filesize = " << size << std::endl;
    if (UDT::ERROR == UDT::send(fhandle, (char*)&size, sizeof(int64_t), 0))
    {
       cout << "send: " << UDT::getlasterror().getErrorMessage() << endl;

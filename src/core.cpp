@@ -807,6 +807,30 @@ POST_CONNECT:
    // acknowledde any waiting epolls to write
    s_UDTUnited.m_EPoll.update_events(m_SocketID, m_sPollID, UDT_EPOLL_OUT, true);
 
+   // try tls handshake, if enabled
+   if (m_tlsType != TLS_NONE) {
+      assert(m_tlsType == TLS_CLIENT);
+      if (!createSecureSocket(m_SocketID)) {
+         CUDT::close(m_SocketID);
+         return UDT::ERROR;
+      }
+      auto ssl_ctx = getSSLCtx(m_SocketID);
+      SSL_set_connect_state(ssl_ctx->ssl.get());
+      ERR_clear_error();
+      auto ret_val = SSL_connect(ssl_ctx->ssl.get());
+      if (ret_val != 1) {
+         ERR_print_errors_fp(stdout);
+         tearSecureSocket(m_SocketID);
+         UDT::close(m_SocketID);
+         return UDT::ERROR;
+      }
+      if (!SSL_is_init_finished(ssl_ctx->ssl.get())) {
+         tearSecureSocket(m_SocketID);
+         UDT::close(m_SocketID);
+         return UDT::ERROR;
+      }
+   }
+
    return 0;
 }
 
@@ -1104,11 +1128,15 @@ int CUDT::send(const char* data, int len)
    if (0 == m_pSndBuffer->getCurrBufSize())
       m_llSndDurationCounter = CTimer::getTime();
 
-   // insert the user buffer into the sening list
-   m_pSndBuffer->addBuffer(data, size);
-
-   // insert this socket to snd list if it is not on the list yet
-   m_pSndQueue->m_pSndUList->update(this, false);
+   if (m_tlsType != TLS_NONE) {
+      auto handle = CUDT::getSSLCtx(m_SocketID);
+      SSL_write(handle->ssl.get(), data, size);
+   } else {
+      // insert the user buffer into the sening list
+      m_pSndBuffer->addBuffer(data, size);
+      // insert this socket to snd list if it is not on the list yet
+      m_pSndQueue->m_pSndUList->update(this, false);
+   }
 
    if (m_iSndBufSize <= m_pSndBuffer->getCurrBufSize())
    {
@@ -1192,7 +1220,14 @@ int CUDT::recv(char* data, int len)
    else if ((m_bBroken || m_bClosing) && (0 == m_pRcvBuffer->getRcvDataSize()))
       throw CUDTException(2, 1, 0);
 
-   int res = m_pRcvBuffer->readBuffer(data, len);
+   int res = 0;
+   
+   if (m_tlsType != TLS_NONE) {
+      auto handle = CUDT::getSSLCtx(m_SocketID);
+      res = SSL_read(handle->ssl.get(), data, len);
+   } else {
+      res =  m_pRcvBuffer->readBuffer(data, len);
+   }
 
    if (m_pRcvBuffer->getRcvDataSize() <= 0)
    {
@@ -1480,7 +1515,12 @@ int64_t CUDT::sendfile(fstream& ifs, int64_t& offset, int64_t size, int block)
       if (0 == m_pSndBuffer->getCurrBufSize())
          m_llSndDurationCounter = CTimer::getTime();
 
-      int64_t sentsize = m_pSndBuffer->addBufferFromFile(ifs, unitsize);
+      int64_t sentsize = 0;
+      
+      if (m_tlsType == TLS_NONE)
+         sentsize = m_pSndBuffer->addBufferFromFile(ifs, unitsize);
+      else
+         sentsize = m_pSndBuffer->addBufferFromFile(ifs, unitsize, CUDT::getSSLCtx(m_SocketID));
 
       if (sentsize > 0)
       {
@@ -1497,7 +1537,6 @@ int64_t CUDT::sendfile(fstream& ifs, int64_t& offset, int64_t size, int block)
       // write is not available any more
       s_UDTUnited.m_EPoll.update_events(m_SocketID, m_sPollID, UDT_EPOLL_OUT, false);
    }
-
    return size - tosend;
 }
 
@@ -1558,7 +1597,12 @@ int64_t CUDT::recvfile(fstream& ofs, int64_t& offset, int64_t size, int block)
          throw CUDTException(2, 1, 0);
 
       unitsize = int((torecv >= block) ? block : torecv);
-      recvsize = m_pRcvBuffer->readBufferToFile(ofs, unitsize);
+      recvsize = 0;
+      
+      if (m_tlsType == TLS_NONE)
+         recvsize = m_pRcvBuffer->readBufferToFile(ofs, unitsize);
+      else
+         recvsize = m_pRcvBuffer->readBufferToFile(ofs, unitsize, CUDT::getSSLCtx(m_SocketID));
 
       if (recvsize > 0)
       {
@@ -2672,4 +2716,142 @@ void CUDT::removeEPoll(const int eid)
    CGuard::enterCS(s_UDTUnited.m_EPoll.m_EPollLock);
    m_sPollID.erase(eid);
    CGuard::leaveCS(s_UDTUnited.m_EPoll.m_EPollLock);
+}
+
+/* TLS extension */
+uptr<SSL_CTX> CUDT::ssl_ctx;
+std::unordered_map<UDTSOCKET, std::unique_ptr<ssl_ctx_t>> CUDT::mSSLInfo;
+bool CUDT::initDone = false;
+TLS_TYPE CUDT::m_tlsType = TLS_NONE;
+std::string CUDT::certificateFile = "server.crt";
+std::string CUDT::privateKeyFile = "key.pem";
+
+void CUDT::setTLS(TLS_TYPE type) {
+   CUDT::m_tlsType = type;
+}
+
+bool CUDT::isInitialized() {
+   if (!initDone)
+      CUDT::init();
+   return initDone;
+}
+
+void CUDT::init() {
+   if (initDone) return;
+   loadConfig();
+   SSL_library_init();
+   OpenSSL_add_all_algorithms();
+   SSL_load_error_strings();
+   ERR_load_BIO_strings();
+   ERR_load_crypto_strings();
+   assert(CUDT::m_tlsType != TLS_NONE);
+   CUDT::ssl_ctx.reset(SSL_CTX_new(m_tlsType == TLS_SERVER ? SSLv23_server_method() : SSLv23_client_method()));
+   SSL_CTX_set_options(CUDT::ssl_ctx.get(), SSL_OP_ALL|SSL_OP_NO_SSLv2|SSL_OP_NO_SSLv3|SSL_OP_NO_TLSv1);
+   SSL_CTX_set_verify(CUDT::ssl_ctx.get(), SSL_VERIFY_NONE, nullptr);
+   initDone = true;
+}
+
+void CUDT::tearSecureSocket(UDTSOCKET socket) {
+   auto it = mSSLInfo.find(socket);
+   if (it != mSSLInfo.end()) {
+      mSSLInfo.erase(it);
+   }
+}
+
+bool CUDT::createSecureSocket(UDTSOCKET socket) {
+   if (!isInitialized())
+      return false;
+   if (socket == UDT::INVALID_SOCK)
+      return false;
+   std::unique_ptr<ssl_ctx_t> ptr{new ssl_ctx_t};
+   ptr->socket = socket;
+   ptr->ssl.reset(SSL_new(CUDT::ssl_ctx.get()));
+   if (m_tlsType == TLS_SERVER) {
+      if (1 != SSL_use_certificate_file(ptr->ssl.get(), certificateFile.c_str(), SSL_FILETYPE_PEM)) {
+         throw udttls_exception("server certificate load failed\n");
+      }
+      if (1 != SSL_use_PrivateKey_file(ptr->ssl.get(), privateKeyFile.c_str(), SSL_FILETYPE_PEM)) {
+         throw udttls_exception("server privatekey load failed\n");
+      }
+      SSL_set_accept_state(ptr->ssl.get());
+   } else {
+      if (1 != SSL_CTX_set_default_verify_paths(CUDT::ssl_ctx.get()))
+         throw udttls_exception("unable to load default keystore");
+      SSL_set_connect_state(ptr->ssl.get());
+   }
+   
+   SSL_set_mode(ptr->ssl.get(), SSL_MODE_AUTO_RETRY);
+
+   ptr->biom = BIO_meth_new(BIO_TYPE_BIO, "udt-bio");
+   
+   BIO_meth_set_read(ptr->biom, [](BIO * bio, char * data, int len) -> int {
+      UDTSOCKET ingress = *reinterpret_cast<UDTSOCKET*>(BIO_get_data(bio));
+      auto handle = CUDT::getUDTHandle(ingress);
+      auto ssl_ctx = CUDT::getSSLCtx(ingress);
+      auto r_val = 0;
+      if (!SSL_is_init_finished(ssl_ctx->ssl.get())) {
+         while( (r_val = handle->m_pRcvBuffer->readBuffer(data, len)) == 0);
+      }
+      else {
+         int remain = len;
+         int offset = 0;
+         while(remain) {
+            r_val = handle->m_pRcvBuffer->readBuffer(&data[offset], len);
+            if (r_val < 0)
+               break;
+            remain -= r_val;
+            offset += r_val;
+         }
+         r_val = len - remain;
+      }
+      return r_val;
+   });
+
+   BIO_meth_set_write(ptr->biom, [](BIO * bio, const char * data, int len) -> int {
+      UDTSOCKET outgress = *reinterpret_cast<UDTSOCKET*>(BIO_get_data(bio));
+      auto handle = CUDT::getUDTHandle(outgress);
+      auto ssl_ctx = CUDT::getSSLCtx(outgress);
+      if (!SSL_is_init_finished(ssl_ctx->ssl.get()))
+         pthread_mutex_lock(&handle->m_SendLock);
+      handle->m_pSndBuffer->addBuffer(data, len, -1, true);
+      handle->m_pSndQueue->m_pSndUList->update(handle, false);
+      if (!SSL_is_init_finished(ssl_ctx->ssl.get()))
+         pthread_mutex_unlock(&handle->m_SendLock);
+      return len;
+   });
+
+   BIO_meth_set_puts(ptr->biom, [](BIO * bio, const char * data) -> int {
+      UDTSOCKET outgress = *reinterpret_cast<UDTSOCKET*>(BIO_get_data(bio));
+      auto len = strlen(data);
+      return BIO_write(bio, data, len);
+   });
+
+   BIO_meth_set_ctrl(ptr->biom, [](BIO * bio, int cmd, long largs, void * args) -> long {
+      if (cmd == SSL_ERROR_WANT_CLIENT_HELLO_CB)
+         return SSL_CLIENT_HELLO_SUCCESS;
+      return 0;
+   });
+
+   ptr->bio = BIO_new(ptr->biom);
+   BIO_set_data(ptr->bio, &ptr->socket);
+
+   SSL_set_bio(ptr->ssl.get(), ptr->bio, ptr->bio);
+
+   mSSLInfo[socket] = std::move(ptr);
+   
+   return true;
+}
+
+ssl_ctx_t * CUDT::getSSLCtx(UDTSOCKET socket) {
+   if (mSSLInfo.find(socket) == mSSLInfo.end())
+      return nullptr;
+   return mSSLInfo[socket].get();
+}
+
+bool CUDT::loadConfig(std::string conf) {
+   if (m_tlsType == TLS_SERVER) {
+      certificateFile = "server.crt";
+      privateKeyFile = "key.pem";
+   }
+   return true;
 }

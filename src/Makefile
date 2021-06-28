@@ -8,7 +8,7 @@ ifndef arch
    arch = IA32
 endif
 
-CCFLAGS = -fPIC -Wall -Wextra -D$(os) -finline-functions -O3 -fno-strict-aliasing -fvisibility=hidden
+CCFLAGS = -fPIC -Wall -Wextra -D$(os) -finline-functions -g -O3 -fno-strict-aliasing -fvisibility=hidden
 
 ifeq ($(arch), IA32)
    CCFLAGS += -DIA32
@@ -42,7 +42,7 @@ libudt.so: $(OBJS)
 ifneq ($(os), OSX)
 	$(C++) -shared -o $@ $^
 else
-	$(C++) -dynamiclib -o libudt.dylib -lstdc++ -lpthread -lm $^
+	$(C++) -dynamiclib -o libudt.dylib -lstdc++ -lpthread -lm -lssl $^
 endif
 
 libudt.a: $(OBJS)

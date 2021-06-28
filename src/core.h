@@ -53,8 +53,29 @@ written by
 #include "ccc.h"
 #include "cache.h"
 #include "queue.h"
+#include <openssl/bio.h>
+#include <openssl/err.h>
+#include <openssl/ssl.h>
+#include <memory>
+#include <unordered_map>
+#include <cassert>
+#include <iostream>
 
 enum UDTSockType {UDT_STREAM = 1, UDT_DGRAM};
+
+enum TLS_TYPE {
+   TLS_NONE = -1,
+   TLS_SERVER = 0,
+   TLS_CLIENT = 1
+};
+
+class udttls_exception {
+   public:
+   std::string msg;
+   udttls_exception(const char * msg) : msg(msg) { }
+   udttls_exception() { }
+   udttls_exception(std::string msg) : msg(msg) { }
+};
 
 class CUDT
 {
@@ -74,6 +95,24 @@ private: // constructor and desctructor
    CUDT(const CUDT& ancestor);
    const CUDT& operator=(const CUDT&) {return *this;}
    ~CUDT();
+
+/* TLS extension */
+private:
+   static uptr<SSL_CTX> ssl_ctx;
+   static std::unordered_map<UDTSOCKET, std::unique_ptr<ssl_ctx_t>> mSSLInfo;
+   static bool initDone;
+   static TLS_TYPE m_tlsType;
+   static bool createSecureSocket(UDTSOCKET socket);
+   static void tearSecureSocket(UDTSOCKET socket);
+   static std::string certificateFile;
+   static std::string privateKeyFile;
+   static bool loadConfig(std::string conf = "");
+public:
+   static ssl_ctx_t * getSSLCtx(UDTSOCKET socket);
+   static bool isInitialized();
+   static void init();
+   static void setTLS(TLS_TYPE type);
+/* TLS extension */
 
 public: //API
    static int startup();
@@ -453,6 +492,5 @@ private: // for epoll
    void addEPoll(const int eid);
    void removeEPoll(const int eid);
 };
-
 
 #endif
